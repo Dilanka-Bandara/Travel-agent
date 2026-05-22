@@ -43,14 +43,21 @@ hotel_booker = Agent(
     llm=local_llm
 )
 
-# We will simulate the data coming from your frontend
+# --- CHANGED SECTION: GETTING USER INPUT ---
+print("\n🌍 Welcome to the AI Travel Planner! Let's build your perfect trip.")
+print("-" * 60)
+
 user_details = {
-    "start_place": "New York",
-    "end_place": "Miami",
-    "vibe": "chill and beachy",
-    "budget": "$150 per night",
-    "transport": "driving own car"
+    "start_place": input("📍 Where are you starting from? (e.g., New York, Colombo): "),
+    "end_place": input("🏁 Where are you going? (e.g., Miami, Kandy): "),
+    "vibe": input("✨ What's the vibe of the trip? (e.g., adventure, chill, romantic): "),
+    "budget": input("💰 What is your hotel budget? (e.g., $150/night, cheap, luxury): "),
+    "transport": input("🚗 How are you traveling? (e.g., driving own car, train, flying): ")
 }
+
+print("\n🤖 Great! I have your details. The AI agents are now working on your plan...\n")
+print("-" * 60)
+# ------------------------------------------
 
 # Task 1: Route Planning
 plan_route_task = Task(
@@ -84,9 +91,9 @@ travel_crew = Crew(
     process=Process.sequential  # This makes them work one after the other
 )
 
-print("Starting the Travel Agent...")
 result = travel_crew.kickoff()
 
+print("\n==========================================")
+print("✈️ FINAL TRAVEL PLAN:")
 print("==========================================")
-print("FINAL TRAVEL PLAN:")
 print(result)
