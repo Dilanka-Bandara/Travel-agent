@@ -1,14 +1,25 @@
-from crewai import Agent, Task, Crew, Process
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai.tools import tool
+from ddgs import DDGS
 
-# --- THESE ARE THE TWO LINES WE UPDATED ---
-from langchain_ollama import OllamaLLM
-from langchain_community.tools import DuckDuckGoSearchRun
+# 1. Connect to your local Ollama model (must support tool calling)
+local_llm = LLM(
+    model="ollama/llama3.1",
+    base_url="http://localhost:11434"
+)
 
-# 1. Connect to your local Ollama model using the new method
-local_llm = OllamaLLM(model="llama3")
-
-# 2. Create the internet search tool
-search_tool = DuckDuckGoSearchRun()
+# 2. Create the internet search tool as a CrewAI-native tool
+@tool("DuckDuckGo Search")
+def search_tool(query: str) -> str:
+    """Search the internet with DuckDuckGo and return the top results."""
+    with DDGS() as ddgs:
+        results = ddgs.text(query, max_results=5)
+    if not results:
+        return "No results found."
+    return "\n\n".join(
+        f"{r.get('title', '')}\n{r.get('href', '')}\n{r.get('body', '')}"
+        for r in results
+    )
 
 # Agent 1: The Route Planner
 route_planner = Agent(
@@ -47,7 +58,7 @@ plan_route_task = Task(
     The user is traveling from {user_details['start_place']} to {user_details['end_place']} by {user_details['transport']}.
     1. Search for the estimated travel time and distance.
     2. Provide a suggested route.
-    3. Generate a Google Maps URL formatted exactly like this: 
+    3. Generate a Google Maps URL formatted exactly like this:
        https://www.google.com/maps/dir/?api=1&origin={user_details['start_place']}&destination={user_details['end_place']}
     ''',
     expected_output='A summary of the travel route, time, distance, and a clickable Google Maps link.',
@@ -70,11 +81,10 @@ find_hotels_task = Task(
 travel_crew = Crew(
     agents=[route_planner, hotel_booker],
     tasks=[plan_route_task, find_hotels_task],
-    process=Process.sequential # This makes them work one after the other
+    process=Process.sequential  # This makes them work one after the other
 )
 
 print("Starting the Travel Agent...")
-# Kick off the process
 result = travel_crew.kickoff()
 
 print("==========================================")
