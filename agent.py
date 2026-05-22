@@ -1,14 +1,39 @@
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
 from ddgs import DDGS
+from pydantic import BaseModel, Field
+from typing import List
 
-# 1. Connect to your local Ollama model (must support tool calling)
+# ==========================================
+# 1. DEFINE NESTED STRUCTURED OUTPUT
+# ==========================================
+class DailyPlan(BaseModel):
+    day_number: int = Field(description="Which day of the trip this is")
+    route_segment: str = Field(description="The starting and ending town for this specific day (e.g., 'Jaffna to Anuradhapura')")
+    activities: List[str] = Field(description="2 to 3 specific activities or attractions along this day's segment that match the user vibe")
+    hotel_name: str = Field(description="Name of the real recommended hotel for this night's stop")
+    hotel_price: str = Field(description="Estimated price per night")
+
+class RouteOption(BaseModel):
+    path_name: str = Field(description="The theme or name of this route (e.g., 'The Historical Inland Route')")
+    full_google_maps_url: str = Field(description="Google Maps URL with all overnight waypoints included")
+    daily_breakdown: List[DailyPlan] = Field(description="A day-by-day breakdown of the journey")
+    why_it_fits: str = Field(description="Why this overall route fits the user's custom description")
+
+class CustomTripItinerary(BaseModel):
+    trip_summary: str = Field(description="A brief overview of how the agent customized these choices")
+    routes: List[RouteOption] = Field(description="A list containing exactly 3 distinct route options")
+
+
+# ==========================================
+# 2. SETUP LLM AND TOOLS
+# ==========================================
 local_llm = LLM(
     model="ollama/llama3.1",
-    base_url="http://localhost:11434"
+    base_url="http://localhost:11434",
+    timeout=600 # Increased timeout because multi-day planning takes time
 )
 
-# 2. Create the internet search tool as a CrewAI-native tool
 @tool("DuckDuckGo Search")
 def search_tool(query: str) -> str:
     """Search the internet with DuckDuckGo and return the top results."""
@@ -21,79 +46,127 @@ def search_tool(query: str) -> str:
         for r in results
     )
 
-# Agent 1: The Route Planner
+
+# ==========================================
+# 3. DEFINE THE AGENTS
+# ==========================================
 route_planner = Agent(
-    role='Expert Travel Logistician',
-    goal='Find the best travel routes and create Google Maps links for the user.',
-    backstory='You are a master of geography and logistics. You always provide clear travel times and direct Google Maps links.',
+    role='Expert Travel Route Architect',
+    goal='Divide a journey into daily segments based on user duration, creating 3 distinct paths.',
+    backstory='You are a master road-trip planner. You know how to pace a trip. If a user has 3 days, you find the perfect overnight stopping towns at the 1/3 and 2/3 marks of the journey.',
     verbose=True,
     allow_delegation=False,
     tools=[search_tool],
     llm=local_llm
 )
 
-# Agent 2: The Accommodation Specialist
-hotel_booker = Agent(
-    role='Hotel Booking Specialist',
-    goal='Search the internet for the best hotels matching the user vibe and budget, prioritizing Booking.com listings.',
-    backstory='You are a luxury and budget travel agent. You know how to find the best hotel deals and always provide real names and descriptions of hotels.',
+experience_specialist = Agent(
+    role='Local Experience & Accommodation Specialist',
+    goal='Find activities and hotels along specific daily segments created by the Route Architect.',
+    backstory='You are a local guide. You know exactly what activities to do along a stretch of road, and the best hotels to sleep at when the day is done. You tailor everything strictly to the user vibe.',
     verbose=True,
     allow_delegation=False,
     tools=[search_tool],
     llm=local_llm
 )
 
-# --- CHANGED SECTION: GETTING USER INPUT ---
-print("\n🌍 Welcome to the AI Travel Planner! Let's build your perfect trip.")
-print("-" * 60)
+
+# ==========================================
+# 4. GET USER INPUTS
+# ==========================================
+print("\n🌍 Welcome to the AI Multi-Day Trip Designer!")
+print("-" * 70)
 
 user_details = {
-    "start_place": input("📍 Where are you starting from? (e.g., New York, Colombo): "),
-    "end_place": input("🏁 Where are you going? (e.g., Miami, Kandy): "),
-    "vibe": input("✨ What's the vibe of the trip? (e.g., adventure, chill, romantic): "),
-    "budget": input("💰 What is your hotel budget? (e.g., $150/night, cheap, luxury): "),
-    "transport": input("🚗 How are you traveling? (e.g., driving own car, train, flying): ")
+    "start_place": input("📍 Starting Point? (e.g., Jaffna): "),
+    "end_place": input("🏁 Final Destination? (e.g., Colombo): "),
+    "duration": input("⏳ How many days for the journey? (e.g., 3): "),
+    "vibe": input("✨ Main vibe? (e.g., extreme adventure, historical, relaxed): "),
+    "budget": input("💰 Hotel budget per night? (e.g., $50, luxury): "),
+    "transport": input("🚗 Mode of transport? (e.g., driving own car): "),
+    "trip_description": input("📝 Describe your dream trip: ")
 }
 
-print("\n🤖 Great! I have your details. The AI agents are now working on your plan...\n")
-print("-" * 60)
-# ------------------------------------------
+print("\n🤖 Calculating pacing, researching activities, and finding hotels... (This may take a few minutes)\n")
+print("-" * 70)
 
-# Task 1: Route Planning
+
+# ==========================================
+# 5. DEFINE THE TASKS
+# ==========================================
 plan_route_task = Task(
     description=f'''
-    The user is traveling from {user_details['start_place']} to {user_details['end_place']} by {user_details['transport']}.
-    1. Search for the estimated travel time and distance.
-    2. Provide a suggested route.
-    3. Generate a Google Maps URL formatted exactly like this:
-       https://www.google.com/maps/dir/?api=1&origin={user_details['start_place']}&destination={user_details['end_place']}
+    The user is driving from {user_details['start_place']} to {user_details['end_place']} over {user_details['duration']} days by {user_details['transport']}.
+    Their vibe: "{user_details['vibe']}".
+
+    Design 3 DIFFERENT travel paths (e.g., Coastal, Central, Fast).
+    
+    For EACH of the 3 paths:
+    1. Calculate where they should stop to sleep each night to break up the journey evenly over {user_details['duration']} days.
+    2. Provide the towns for those overnight stops.
+    3. Generate ONE master Google Maps URL for the whole path linking the start, waypoints, and end.
     ''',
-    expected_output='A summary of the travel route, time, distance, and a clickable Google Maps link.',
+    expected_output='A strategic pacing guide for 3 different paths, detailing exactly which towns to sleep in each night.',
     agent=route_planner
 )
 
-# Task 2: Hotel Searching
-find_hotels_task = Task(
+build_itinerary_task = Task(
     description=f'''
-    The user is going to {user_details['end_place']} with a {user_details['budget']} budget. They want a {user_details['vibe']} vibe.
-    1. Use the search tool to find 3 real hotels in {user_details['end_place']} that fit this description.
-    2. Try to search specifically for Booking.com listings (e.g., search "best chill hotels in Miami site:booking.com").
-    3. Provide the hotel name, a short description, and an estimated price.
+    Read the pacing guide from the Route Architect.
+    The user wants a "{user_details['vibe']}" experience and specifically noted: "{user_details['trip_description']}".
+    Budget: {user_details['budget']} per night.
+    
+    For EACH of the 3 paths, you must create a daily breakdown for all {user_details['duration']} days:
+    1. For each day's driving segment, use your search tool to find 2-3 real activities along the way that perfectly match the vibe.
+    2. For each night's stopping town, search for 1 real hotel matching the budget.
+    
+    Format everything into the CustomTripItinerary schema perfectly.
     ''',
-    expected_output='A list of 3 hotels with descriptions, estimated prices, and recommendations on why they fit the vibe.',
-    agent=hotel_booker
+    expected_output=f'A fully populated CustomTripItinerary containing 3 paths, with {user_details['duration']} days of activities and hotels for each path.',
+    agent=experience_specialist,
+    output_pydantic=CustomTripItinerary
 )
 
-# Assemble the Crew
+
+# ==========================================
+# 6. ASSEMBLE AND EXECUTE
+# ==========================================
 travel_crew = Crew(
-    agents=[route_planner, hotel_booker],
-    tasks=[plan_route_task, find_hotels_task],
-    process=Process.sequential  # This makes them work one after the other
+    agents=[route_planner, experience_specialist],
+    tasks=[plan_route_task, build_itinerary_task],
+    process=Process.sequential
 )
 
-result = travel_crew.kickoff()
+crew_output = travel_crew.kickoff()
 
-print("\n==========================================")
-print("✈️ FINAL TRAVEL PLAN:")
-print("==========================================")
-print(result)
+
+# ==========================================
+# 7. PRINT NESTED OUTPUT BEAUTIFULLY
+# ==========================================
+try:
+    final_plan: CustomTripItinerary = crew_output.pydantic
+    
+    print("\n" + "="*80)
+    print(f"🗺️  YOUR {user_details['duration']}-DAY CUSTOM TRAVEL PLAN")
+    print("="*80)
+    print(f"\n🤖 System Overview: {final_plan.trip_summary}\n")
+
+    for i, route in enumerate(final_plan.routes, 1):
+        print("=" * 80)
+        print(f"🌟 OPTION {i}: {route.path_name.upper()}")
+        print(f"🗺️  Full Route Map : {route.full_google_maps_url}")
+        print(f"✨ Why it fits   : {route.why_it_fits}")
+        print("-" * 80)
+        
+        for day in route.daily_breakdown:
+            print(f"   📅 DAY {day.day_number} | Drive: {day.route_segment}")
+            print("      🎯 Activities:")
+            for act in day.activities:
+                print(f"         - {act}")
+            print(f"      🏨 Night Stay: {day.hotel_name} ({day.hotel_price})")
+            print("")
+            
+except Exception as e:
+    print("\n⚠️ The model struggled to compile all the data into the strict JSON format.")
+    print("Here is the raw text output it managed to generate:")
+    print(crew_output.raw)
